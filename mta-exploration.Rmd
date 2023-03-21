@@ -197,8 +197,23 @@ The first is called `Stations`, which contains the complex IDs as well as the no
 ```{r}
 library(readxl)
 
+str_arrange <- function(x){
+  x %>%
+    stringr::str_split("") %>% # Split string into letters
+    purrr::map(~sort(.) %>% paste(collapse = "")) %>% # Sort and re-combine
+    as_vector() # Convert list into vector
+}
+
 # Read in the Remote-Booth-Station
-remote_booth_station <- 
+remote_booth_station <- tud21 %>% 
+  clean_names()
+
+remote_booth_station$line_name <- str_arrange(remote_booth_station$line_name)
+
+remote_booth_station <- remote_booth_station %>% 
+  filter(division == "BMT" | division == "IND" | division == "IRT") %>% 
+  distinct(unit, station, line_name, division,
+           .keep_all = TRUE)
 
 # Read in the Station data set 
 mta_locations <- read_csv("data/station_locations_2022.csv") %>% 
