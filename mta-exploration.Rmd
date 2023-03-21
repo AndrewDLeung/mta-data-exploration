@@ -1,0 +1,353 @@
+---
+title: "MTA Exploration"
+author: "Andrew Leung"
+date: "3/4/2023"
+output: 
+  html_document:
+    fig_height: 3
+    fig_width: 5
+  pdf_document:
+    fig_height: 3
+    fig_width: 5
+  word_document:
+    fig_height: 3
+    fig_width: 5
+---
+
+```{r, setup, include=FALSE}
+require(mosaic)   # Load additional packages here 
+knitr::opts_chunk$set(
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+```
+
+
+# COVID, NYC, and the MTA
+
+The New York City subway is one of the busiest subway systems in the world, with trains regularly carrying upwards of 1.6 billion passengers yearly from 2016-2019. The COVID-19 pandemic changed this, with ridership dropping by [62%](https://new.mta.info/agency/new-york-city-transit/subway-bus-ridership-2021) from 2020 to 2021. While a majority of New Yorkers were required to stay home, essential workers including hospital staff, sanitation crews, restaurant workers, and many others continued to ride the subways to keep the City running. In this investigation, I want to first visualize the change in NYC ridership before, during, and after the peaks of the pandemic. I then want to dig one level deeper, looking at changes in ridership by borough and neighborhood, observing income demographics of each neighborhood as well. 
+
+# Data
+
+For this project, 
+
+## Load in Libraries
+```{r}
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+```
+
+## Load in MTA Turnstile Data from 2019-2021
+```{r}
+tud19 <- read_csv(file = "data/Turnstile_Usage_Data__2019.csv")
+tud20 <- read_csv(file = "data/Turnstile_Usage_Data__2020.csv")
+tud21 <- read_csv(file = "data/Turnstile_Usage_Data__2021.csv")
+```
+
+## Cleaning Time
+
+Before we get cleaning, let's take a look at the data. 
+
+```{r}
+head(tud19)
+```
+Okay, interesing. The data doesn't look as straightforward as one would expect. What does `c_a`, `unit`, and `scp` mean? Why are `entries` and `exits` sometimes in the 10s of millions? What do the `date` and `time` columns signify? Thankfully, there is a large community of public transportation data fans like myself who can answer some of those questions.
+
+An SCP, or "subunit channel position," represents the address of a specific turnstile. These specific turnstiles are usually found in groups known as a CA, or "control area." Each CA is then grouped in a station known as a "remote unit", or "unit" in this data set. They are also called "remotes", as we'll see later on. Each of these stations are then divided into divisions, which represent the transit companies that used to manage each line. The three major companies were the Brooklyn-Manhattan Transit Company (BMT), Interborough Rapid Transit Company (IRT), and the Independent Subway System (IND), which merged in 1940 and became the NYC Subway System that we know today. 
+
+The other divisions in this data set are the PATH Train (PTH), which travels from NYC to New Jersey, the Roosevelt Island Tramway (RIT), which travels from upper Manhattan to Roosevelt Island, and the Staten Island Railway (SRT), which services Staten Island via the Staten Island Ferry. Since most of NYC's ridership is in the NYC Subway System, we will be excluding these divisions. 
+
+Entries and exits are a misleading metric because the number is actually a cumulative value that has been counting since the device was installed. So, to get the true count of how many entries or exits there were at a turnstile at a given time (`time` describes when the data was recorded, which is usually in 4-hr intervals), you need to take the difference of the current and previous value. 
+
+With these definitions in mind, let's start the process of cleaning up this data. 
+
+First, let's filter out the PTH, RIT, and SRT from the dataset. 
+
+```{r}
+tud19_clean <- tud19 %>% 
+  clean_names() %>% 
+  filter(division == "BMT" | division == "IND" | division == "IRT" )
+```
+
+Now let's take a look at the data:
+
+```{r}
+head(tud19_clean)
+```
+
+Perfect! Now we have data the only pertains to the NYC Subway System. Next, we have to deal with these turnstiles. Because a specific turnstile can only be addressed by its SCP, CA, and Unit, let's make an identifier that combines each of these columns so that we can sort by it. In addition to this identifier, we also want to make an ID for each row, since every 4 hours is a new observation for each turnstile. To do this, we will combine the turnstile ID with the date and time. 
+
+```{r}
+tud19_clean <- tud19_clean %>% 
+  # Combine the three columns together to make an ID
+  mutate(turnstile_id = paste0(unit, c_a, scp),
+         # Combine date and time to make a time stamp
+         timestamp = paste(date, time,
+                           sep = " "),
+         # With the turnstile ID and time stamp, we can now make a unique
+         # ID for every observation
+         observation_id = paste(turnstile_id, timestamp,
+                                sep = " "))
+
+col_order <- c("observation_id", 
+               "turnstile_id",
+               "station",
+               "timestamp",
+               "entries",
+               "exits",
+               "line_name",
+               "unit",
+               "c_a",
+               "scp",
+               "division",
+               "date",
+               "time",
+               "description")
+
+tud19_clean <- tud19_clean[, col_order]
+
+head(tud19_clean)
+```
+
+Creating a unique ID for each observation will make this data set more versatile to use for future visualizations. For now, I want to aggregate the number of entries and exits for each turnstile in each station per day. 
+
+To do this, I will use the `lag` function to take the difference between the current observation and the previous one. However, there are a couple wrinkles. First, not every day is recorded. Second, when transitioning from one turnstile to another, the date resets from 12/31 to 1/1. Thankfully, we can solve both of these issues by performing the `lag` calculation only if the difference the date of the observation is either 0 (e.g. 1/1/19 at 4am and 1/1/19 at 8am) or 1 (e.g. 1/1/19 at 8am and 1/2/19 at 1/2/19). A difference that is negative would indicate a switch in machines, since the date would reset from 12/31 to 1/1. A difference that is greater than 1 indicates that a day was skipped in the recording process. In both of these cases, the count is set to 0. 
+
+
+```{r}
+
+# Convert date column into class Date
+tud19_clean$date <- gsub('/', '-', tud19_clean$date)
+tud19_clean$date <- mdy(tud19_clean$date)
+
+# Organize the data frame by turnstile and date and
+# add in column with the differences in dates between each observation
+tud19_clean <- tud19_clean %>% 
+  arrange(turnstile_id, timestamp) %>%
+  mutate(yday = yday(date),
+         yday_diff = yday - dplyr::lag(yday, n = 1)) 
+
+# Calculate turnstile entries and exits by taking the difference between observations
+tud19_clean <- tud19_clean %>%
+  mutate(net_entries = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      entries - dplyr::lag(entries, n = 1))) %>% 
+  mutate(net_exits = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      exits - dplyr::lag(exits, n = 1)))
+
+# The lag function makes the first entry "NA." So I want to make sure those values are changed to 0. 
+tud19_clean <- tud19_clean %>% 
+  mutate(net_entries = coalesce(net_entries, 0),
+         yday_diff = coalesce(yday_diff, 0),
+         net_exits = coalesce(net_exits, 0))
+
+# Change the column order so the data frame can be read more logically
+col_order <- c("observation_id", 
+               "turnstile_id",
+               "station",
+               "timestamp",
+               "entries",
+               "net_entries",
+               "exits",
+               "net_exits",
+               "date",
+               "time",
+               "yday",
+               "yday_diff",
+               "line_name",
+               "unit",
+               "c_a",
+               "scp",
+               "division",
+               "description")
+
+tud19_clean <- tud19_clean[, col_order]
+
+# Aggregate the number of entries and exits per turnstile per day. 
+tud19_sum <- tud19_clean %>% 
+  group_by(turnstile_id, 
+           date, 
+           station,
+           line_name,
+           unit) %>% 
+  summarise(entry_total = sum(net_entries),
+            exit_total = sum(net_exits))
+
+```
+
+Great! Now we have a data frame containing the total number of entries and exits for each turnstile at each station for (almost) every day of 2019. Now, I want to aggregate the number of entries and exits per month at each station. However, as Chris Whong discovered in his ["Taming"](https://medium.com/qri-io/taming-the-mtas-unruly-turnstile-data-c945f5f96ba0) of the MTA turnstile data, there are some discrepancies. To show them, let's look at the 14th Street Stations.
+
+```{r}
+complexes <- tud19 %>% 
+  filter(Station == "14 ST" | Station == "6 AV") %>% 
+  distinct(Unit, 
+           Station,
+           .keep_all = TRUE)
+
+head(complexes)
+```
+
+As you can see, there are two stations (6th Avenue and 14th Street) with the same remote unit (R163). There are also instances where the same station has multiple remote units. These are known as "station complexes", or stations "connected with a passageway inside fare control." In the `Turnstile_Usage_Data`, there is no way to distinguish a complex. Thankfully, again as Chris Whong already found, we can join a couple tables together from the MTA to get there. 
+
+The first is called `Stations`, which contains the complex IDs as well as the non-abbreviated names for each station. This will be helpful later on when we join our larger table with geographical data (ZIP codes, neighborhood names, etc). The second is called `Remote-Booth-Station`, which contains all of the remote IDs of each station. We can join these two tables by each station's complex ID; however, because the MTA's `Remote-Booth-Station` data set is outdated, we will need to create our own. 
+
+```{r}
+library(readxl)
+
+# Read in the Remote-Booth-Station
+remote_booth_station <- 
+
+# Read in the Station data set 
+mta_locations <- read_csv("data/station_locations_2022.csv") %>% 
+  clean_names()
+
+```
+
+```{r}
+# Clean up station names and lines so that tables can be joined
+remote_booth_station <- remote_booth_station %>% 
+  rename(station_abbr = station)
+
+remote_booth_station <- remote_booth_station %>% 
+  mutate(station_long = str_to_title(station_abbr),
+         station_long = str_replace(station_long, "Ave", "Av"))
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+Now that we have all of this data, it is not as simple as aggregating on each turnstile. This is because there are multiple stops and platforms that can be accessed by the same turnstile. 
+
+
+It seems like this data doesn't have any location data. If we're going to break down subway usage by borough or neighborhood, we're going to need to join another dataset with this one. Luckily, wikipedia has a list of all the NYC subway stations with their respective boroughs and neighborhoods! 
+
+```{r}
+library(readxl)
+library(stringi)
+
+station_name_abbr <- tud19_clean %>% 
+  select(c(station, line_name)) %>% 
+  mutate(station_line = paste(station, line_name, sep = "_")) %>% 
+  distinct(station_line,
+           .keep_all = TRUE)
+
+
+
+# Thank you @MartinCTC
+str_arrange <- function(x){
+  x %>%
+    stringr::str_split("") %>% # Split string into letters
+    purrr::map(~sort(.) %>% paste(collapse = "")) %>% # Sort and re-combine
+    as_vector() # Convert list into vector
+}
+string <- "NGRSACE123W"
+str_arrange(string)
+
+station_location <- read_excel("data/station_location_wiki.xlsx") %>% 
+  clean_names()
+
+station_location <- station_location %>% 
+  clean_names() %>% 
+  mutate(station = str_replace(station, "First", "1"),
+         station = str_replace(station, "Second", "2"),
+         station = str_replace(station, "Third", "3"),
+         station = str_replace(station, "Fourth", "4"),
+         station = str_replace(station, "Fifth", "5"),
+         station = str_replace(station, "Sixth", "6"),
+         station = str_replace(station, "Seventh", "7"),
+         station = str_replace(station, "Eighth", "8"),
+         station = str_replace(station, "Ninth", "9"),
+         station = str_replace(station, "Street", "ST"),
+         station = str_replace(station, "Avenue", "AV"))
+
+station_location$station <- gsub("([0-9]+)th", "\\1", 
+                            gsub("([0-9]+)st", "\\1",
+                            gsub("([0-9]+)rd", "\\1",
+                            gsub("([0-9]+)nd", "\\1", 
+                            gsub("†", "", 
+                            gsub("STs", "STS", station_location$station))))))
+
+station_location$station <- toupper(station_location$station)
+
+station_location$services <- gsub("\"", "",
+                             gsub("train", "", 
+                             gsub("shuttle\\[a\\]", "S", 
+                             gsub("shuttle\\[b\\]", "S", 
+                             gsub("shuttle\\[c\\]", "S", station_location$services)))))
+
+station_location$services <- stri_replace_all_charclass(station_location$services, "\\p{WHITE_SPACE}", "")
+
+station_location$services <- str_arrange(station_location$services)
+
+station_location <- station_location %>% 
+  mutate(station_line = paste(station, services, sep = "_"))
+
+
+```
+
+
+
+Great! Now we have a unique ID for each observation and each turnstile. Now, we have to figure out the net entries and exits of each turnstile at each collection period. To do this, we will have to take the difference of one observation and its previous one because remember that turnstiles are cumulative counters. We can calculate this figure using the `lag` function. 
+
+
+
+
+## Using RMarkdown
+
+
+### Text
+
+Text can be decorated with **bold** or *italics*.  It is also possible to 
+
+* create [links](https://rmarkdown.rstudio.com/) 
+* include mathematics like $e=mc^2$ or 
+$$y = \beta_0 + \beta_1 x_1 + \beta_2 x_2$$
+
+Be sure to put a space after the * when you are creating bullets and a space after # when 
+creating section headers, but **not** between $ and the mathematical formulas.
+
+### Graphics
+
+If the code of an R chunk produces a plot, this plot can be displayed in the resulting file.
+```{r}
+gf_point(births ~ date, data = Births78)
+```
+
+### R output
+Other forms of R output are also displayed as they are produced.
+```{r}
+favstats(~ births, data = Births78)
+```
+
+### Destination formats
+
+This file can be knit to HTML, PDF, or Word.  In RStudio, just select the desired output file type
+and click on `Knit HTML`, `Knit PDF`, or `Knit Word`.  Use the dropdown menu next to that to 
+change the desired file type.
+
+### Documenting file creation 
+
+It's useful to record some information about how your file was created.
+
+  * File creation date: `r Sys.Date()`
+  * `r R.version.string`
+  * R version (short form): `r getRversion()`
+  * `mosaic` package version: `r packageVersion("mosaic")`
+  * Additional session information
+  
+```{r echo=FALSE}
+sessionInfo()  # could use devtools::session_info() if you prefer that
+```
+  
