@@ -53,7 +53,7 @@ Before we get cleaning, let's take a look at the data.
 ```{r}
 head(tud19)
 ```
-Okay, interesing. The data doesn't look as straightforward as one would expect. What does `c_a`, `unit`, and `scp` mean? Why are `entries` and `exits` sometimes in the 10s of millions? What do the `date` and `time` columns signify? Thankfully, there is a large community of public transportation data fans like myself who can answer some of those questions.
+Okay, interesting. The data doesn't look as straightforward as one would expect. What does `c_a`, `unit`, and `scp` mean? Why are `entries` and `exits` sometimes in the 10s of millions? What do the `date` and `time` columns signify? Thankfully, there is a large community of public transportation data fans like myself who can answer some of those questions.
 
 An SCP, or "subunit channel position," represents the address of a specific turnstile. These specific turnstiles are usually found in groups known as a CA, or "control area." Each CA is then grouped in a station known as a "remote unit", or "unit" in this data set. They are also called "remotes", as we'll see later on. Each of these stations are then divided into divisions, which represent the transit companies that used to manage each line. The three major companies were the Brooklyn-Manhattan Transit Company (BMT), Interborough Rapid Transit Company (IRT), and the Independent Subway System (IND), which merged in 1940 and became the NYC Subway System that we know today. 
 
