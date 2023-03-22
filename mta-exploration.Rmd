@@ -213,13 +213,29 @@ remote_booth_station$line_name <- str_arrange(remote_booth_station$line_name)
 remote_booth_station <- remote_booth_station %>% 
   filter(division == "BMT" | division == "IND" | division == "IRT") %>% 
   distinct(unit, station, line_name, division,
-           .keep_all = TRUE)
+           .keep_all = TRUE) %>% 
+  select(-c(date, time, description, entries, exits)) 
+
+remote_booth_station <- remote_booth_station %>% 
+  rename(booth = c_a)
 
 # Read in the Station data set 
 mta_locations <- read_csv("data/station_locations_2022.csv") %>% 
   clean_names()
 
 ```
+
+Because there are no alike columns in both data frames, I will have to add a complex ID column manually into `remote_booth_station`. I would have changed all of the names in `remote_booth_station` into the better formatted version in `mta_locations` to join the two tables; however, because of the lack of consistent naming conventions, the manual addition will be easier.
+
+```{r}
+library(writexl)
+
+write_xlsx(remote_booth_station, 
+           path = "/Users/andrew/Desktop/data-science/projects/mta-data-exploration/data/remote_booth_station_2021.xlsx")
+```
+
+
+
 
 ```{r}
 # Clean up station names and lines so that tables can be joined
