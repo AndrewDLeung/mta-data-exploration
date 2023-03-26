@@ -188,7 +188,9 @@ tud19_sum <- tud19_clean %>%
            date, 
            station,
            line_name,
-           unit) %>% 
+           unit,
+           c_a,
+           scp) %>% 
   summarise(entry_total = sum(net_entries),
             exit_total = sum(net_exits))
 
@@ -256,17 +258,42 @@ if(!file.exists("/Users/andrew/Desktop/data-science/projects/mta-data-exploratio
 }
 ```
 
-Now let's join the new `remote_booth_station` with the `mta_locations` data frame:
+Now let's join the new `remote_booth_station` to our `tud19_sum` data frame:
 
 ```{r}
 remote_booth_station$complex_id <- as.numeric(remote_booth_station$complex_id)
 
 tud19_rbs_join <- left_join(tud19_sum,
                             remote_booth_station,
-                            by = c("unit" = "unit",
-                                   "station" = "station"))
+                            by = c("station" = "station",
+                                   "unit" = "unit")) %>% 
+  select(-c(line_name.x,
+            booth,
+            scp.y))
 
+tud19_location_join <- left_join(tud19_rbs_join,
+                                  mta_locations,
+                                  by = "complex_id") %>% 
+  distinct(turnstile_id, date, station, 
+           .keep_all = TRUE)
 
+tud19_location_join <- tud19_location_join %>% 
+  select(-c(division.y,
+            daytime_routes,
+            ada_direction_notes,
+            ada_nb,
+            ada_sb,
+            capital_outage_nb,
+            capital_outage_sb)) %>% 
+  rename(station_abbr = station,
+         scp = scp.x,
+         line_name = line_name.y,
+         station_long = stop_name)
+
+tud19_location_join <- tud19_location_join %>% 
+  rename(division = division.x,
+         complex_lat = gtfs_latitude,
+         complex_long = gtfs_longitude)
 
 station_join <- inner_join(remote_booth_station,
                            mta_locations,
