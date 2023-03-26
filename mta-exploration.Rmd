@@ -115,6 +115,8 @@ Creating a unique ID for each observation will make this data set more versatile
 
 To do this, I will use the `lag` function to take the difference between the current observation and the previous one. However, there are a couple wrinkles. First, not every day is recorded. Second, when transitioning from one turnstile to another, the date resets from 12/31 to 1/1. Thankfully, we can solve both of these issues by performing the `lag` calculation only if the difference the date of the observation is either 0 (e.g. 1/1/19 at 4am and 1/1/19 at 8am) or 1 (e.g. 1/1/19 at 8am and 1/2/19 at 1/2/19). A difference that is negative would indicate a switch in machines, since the date would reset from 12/31 to 1/1. A difference that is greater than 1 indicates that a day was skipped in the recording process. In both of these cases, the count is set to 0. 
 
+This is not the end of our problems unfortunately. Sometimes, the turnstiles simply just start counting down instead of up. Many in the MTA data community believe that when there is maintenance, workers may sometimes reverse the counter. Since this is the case, we can just take the absolute value of the number, as long as it is not less than -10,000. 
+
 
 ```{r}
 
@@ -166,7 +168,21 @@ col_order <- c("observation_id",
 
 tud19_clean <- tud19_clean[, col_order]
 
-# Aggregate the number of entries and exits per turnstile per day. 
+# Turnstiles with extra large or small numbers set to 0
+# Take absolute value of turnstiles with reversed counters 
+tud19_clean <- tud19_clean %>% 
+  mutate(
+  net_entries = case_when(
+    net_entries > 10000 | net_entries < -10000 ~ 0,
+    net_entries < 0 | net_entries > -10000 ~ abs(net_entries),
+    TRUE ~ net_entries
+  ),
+  net_exits = case_when(
+    net_exits > 10000 | net_exits < -10000 ~ 0,
+    net_exits < 0 | net_exits > -10000 ~ abs(net_exits),
+    TRUE ~ net_exits))
+
+# Aggregate the number of entries and exits by turnstile. 
 tud19_sum <- tud19_clean %>% 
   group_by(turnstile_id, 
            date, 
@@ -230,10 +246,41 @@ Because there are no alike columns in both data frames, I will have to add a com
 ```{r}
 library(writexl)
 
-write_xlsx(remote_booth_station, 
-           path = "/Users/andrew/Desktop/data-science/projects/mta-data-exploration/data/remote_booth_station_2021.xlsx")
+# If a new RBS file doesn't exist, create one to edit. 
+# Once edited, it will automatically overwrite the current RBS 
+if(!file.exists("/Users/andrew/Desktop/data-science/projects/mta-data-exploration/data/remote_booth_station_2021.xlsx")) {
+  write_xlsx(remote_booth_station, 
+          path = "/Users/andrew/Desktop/data-science/projects/mta-data-exploration/data/remote_booth_station_2021.xlsx")
+} else {
+  remote_booth_station <- read_excel("data/remote_booth_station_2021.xlsx")
+}
 ```
 
+Now let's join the new `remote_booth_station` with the `mta_locations` data frame:
+
+```{r}
+remote_booth_station$complex_id <- as.numeric(remote_booth_station$complex_id)
+
+tud19_rbs_join <- left_join(tud19_sum,
+                            remote_booth_station,
+                            by = c("unit" = "unit",
+                                   "station" = "station"))
+
+
+
+station_join <- inner_join(remote_booth_station,
+                           mta_locations,
+                           by = "complex_id")
+
+tud19_join <- inner_join(tud19_sum,
+                         station_join,
+                         by = "unit") 
+
+tud19_join <- tud19_join %>% 
+  distinct(turnstile_id, date,
+           .keep_all = TRUE) %>% 
+  arrange(turnstile_id)
+```
 
 
 
