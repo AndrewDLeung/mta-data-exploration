@@ -263,6 +263,8 @@ Now let's join the new `remote_booth_station` to our `tud19_sum` data frame:
 ```{r}
 remote_booth_station$complex_id <- as.numeric(remote_booth_station$complex_id)
 
+
+# First join the RBS data frame to the turnstile sum data frame
 tud19_rbs_join <- left_join(tud19_sum,
                             remote_booth_station,
                             by = c("station" = "station",
@@ -271,12 +273,14 @@ tud19_rbs_join <- left_join(tud19_sum,
             booth,
             scp.y))
 
+# Next, join the location data to the previous joined data frame
 tud19_location_join <- left_join(tud19_rbs_join,
                                   mta_locations,
                                   by = "complex_id") %>% 
   distinct(turnstile_id, date, station, 
            .keep_all = TRUE)
 
+# Clean up column names / reorganize columns
 tud19_location_join <- tud19_location_join %>% 
   select(-c(division.y,
             daytime_routes,
@@ -295,38 +299,325 @@ tud19_location_join <- tud19_location_join %>%
          complex_lat = gtfs_latitude,
          complex_long = gtfs_longitude)
 
-station_join <- inner_join(remote_booth_station,
-                           mta_locations,
-                           by = "complex_id")
-
-tud19_join <- inner_join(tud19_sum,
-                         station_join,
-                         by = "unit") 
-
-tud19_join <- tud19_join %>% 
-  distinct(turnstile_id, date,
-           .keep_all = TRUE) %>% 
-  arrange(turnstile_id)
+complex_list <- unique(tud19_location_join[, c("station_abbr", 
+                                               "station_long", 
+                                               "complex_id")])
 ```
+
+Now we can finally start visualizing! Let's see what the system-wide entry/exit data looks like
+
+```{r, fig.width = 12}
+system_total_2019 <- tud19_location_join %>% 
+  group_by(date) %>% 
+  summarise(daily_entries = sum(entry_total),
+            daily_exits = sum(exit_total))
+
+system_weekly_2019 <- tud19_location_join %>% 
+  mutate(week_num = strftime(date, format = "%V")) %>% 
+  group_by(week_num) %>% 
+  summarise(weekly_entries = sum(entry_total),
+            weekly_exits = sum(exit_total))
+
+system_2019_plot <- ggplot(data = system_total_2019,
+                           aes(x = date)) +
+  geom_line(aes(y = daily_entries, color = "daily_entries")) +
+  geom_line(aes(y = daily_exits, color = "daily_exits")) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  scale_y_continuous(name = "Daily Entries / Exits", labels = scales::comma) +
+  theme(legend.position = "bottom",
+        legend.text = element_text(color = "grey20", size = 20),
+        legend.title = element_text(color = "grey20", size = 20),
+        axis.text.x = element_text(color = "grey20", size = 20),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20))
+
+system_2019_plot
+```
+
+Great! Now we have a plot visualizing the number of entries and exits across the NYC subway system for the year 2019. One interesting thing to notice is how there seem to be more entries than exits. Intuitively, these number should be equal. While this could simply be chalked up to measurement errors (which, after dealing with this turnstile data is certainly possible), one more practical reason could be the use of exit doors. Especially during rush hour, exiting via single person turnstiles can be slow. So, some people open the emergency exit doors, which allow hundreds of people to exit quicker. Compound that over all NYC stations, and you have made up at least some of the difference show in the graph. 
+
+Now, let's repeat this cleaning process for the 2020 and 2021 data. 
 
 
 
 ```{r}
-# Clean up station names and lines so that tables can be joined
-remote_booth_station <- remote_booth_station %>% 
-  rename(station_abbr = station)
+tud20_clean <- tud20 %>% 
+  clean_names() %>% 
+  filter(division == "BMT" | division == "IND" | division == "IRT" ) %>% 
+  mutate(turnstile_id = paste0(unit, c_a, scp),
+         # Combine date and time to make a time stamp
+         timestamp = paste(date, time,
+                           sep = " "),
+         # With the turnstile ID and time stamp, we can now make a unique
+         # ID for every observation
+         observation_id = paste(turnstile_id, timestamp,
+                                sep = " "))
 
-remote_booth_station <- remote_booth_station %>% 
-  mutate(station_long = str_to_title(station_abbr),
-         station_long = str_replace(station_long, "Ave", "Av"))
+# Convert date column into class Date
+tud20_clean$date <- gsub('/', '-', tud20_clean$date)
+tud20_clean$date <- mdy(tud20_clean$date)
 
+# Organize the data frame by turnstile and date and
+# add in column with the differences in dates between each observation
+tud20_clean <- tud20_clean %>% 
+  arrange(turnstile_id, timestamp) %>%
+  mutate(yday = yday(date),
+         yday_diff = yday - dplyr::lag(yday, n = 1)) 
 
+# Calculate turnstile entries and exits by taking the difference between observations
+tud20_clean <- tud20_clean %>%
+  mutate(net_entries = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      entries - dplyr::lag(entries, n = 1))) %>% 
+  mutate(net_exits = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      exits - dplyr::lag(exits, n = 1)))
+
+# The lag function makes the first entry "NA." So I want to make sure those values are changed to 0. 
+tud20_clean <- tud20_clean %>% 
+  mutate(net_entries = coalesce(net_entries, 0),
+         yday_diff = coalesce(yday_diff, 0),
+         net_exits = coalesce(net_exits, 0))
+
+# Change the column order so the data frame can be read more logically
+col_order <- c("observation_id", 
+               "turnstile_id",
+               "station",
+               "timestamp",
+               "entries",
+               "net_entries",
+               "exits",
+               "net_exits",
+               "date",
+               "time",
+               "yday",
+               "yday_diff",
+               "line_name",
+               "unit",
+               "c_a",
+               "scp",
+               "division",
+               "description")
+
+tud20_clean <- tud20_clean[, col_order]
+
+# Turnstiles with extra large or small numbers set to 0
+# Take absolute value of turnstiles with reversed counters 
+tud20_clean <- tud20_clean %>% 
+  mutate(
+  net_entries = case_when(
+    net_entries > 10000 | net_entries < -10000 ~ 0,
+    net_entries < 0 | net_entries > -10000 ~ abs(net_entries),
+    TRUE ~ net_entries
+  ),
+  net_exits = case_when(
+    net_exits > 10000 | net_exits < -10000 ~ 0,
+    net_exits < 0 | net_exits > -10000 ~ abs(net_exits),
+    TRUE ~ net_exits))
+
+# Aggregate the number of entries and exits by turnstile. 
+tud20_sum <- tud20_clean %>% 
+  group_by(turnstile_id, 
+           date, 
+           station,
+           line_name,
+           unit,
+           c_a,
+           scp) %>% 
+  summarise(entry_total = sum(net_entries),
+            exit_total = sum(net_exits))
+
+tud20_rbs_join <- left_join(tud20_sum,
+                            remote_booth_station,
+                            by = c("station" = "station",
+                                   "unit" = "unit")) %>% 
+  select(-c(line_name.x,
+            booth,
+            scp.y))
+
+# Next, join the location data to the previous joined data frame
+tud20_location_join <- left_join(tud20_rbs_join,
+                                  mta_locations,
+                                  by = "complex_id") %>% 
+  distinct(turnstile_id, date, station, 
+           .keep_all = TRUE)
+
+# Clean up column names / reorganize columns
+tud20_location_join <- tud20_location_join %>% 
+  select(-c(division.y,
+            daytime_routes,
+            ada_direction_notes,
+            ada_nb,
+            ada_sb,
+            capital_outage_nb,
+            capital_outage_sb)) %>% 
+  rename(station_abbr = station,
+         scp = scp.x,
+         line_name = line_name.y,
+         station_long = stop_name)
+
+tud20_location_join <- tud20_location_join %>% 
+  rename(division = division.x,
+         complex_lat = gtfs_latitude,
+         complex_long = gtfs_longitude)
 
 
 ```
 
+```{r}
+tud21_clean <- tud21 %>% 
+  clean_names() %>% 
+  filter(division == "BMT" | division == "IND" | division == "IRT" ) %>% 
+  mutate(turnstile_id = paste0(unit, c_a, scp),
+         # Combine date and time to make a time stamp
+         timestamp = paste(date, time,
+                           sep = " "),
+         # With the turnstile ID and time stamp, we can now make a unique
+         # ID for every observation
+         observation_id = paste(turnstile_id, timestamp,
+                                sep = " "))
 
+# Convert date column into class Date
+tud21_clean$date <- gsub('/', '-', tud21_clean$date)
+tud21_clean$date <- mdy(tud21_clean$date)
 
+# Organize the data frame by turnstile and date and
+# add in column with the differences in dates between each observation
+tud21_clean <- tud21_clean %>% 
+  arrange(turnstile_id, timestamp) %>%
+  mutate(yday = yday(date),
+         yday_diff = yday - dplyr::lag(yday, n = 1)) 
+
+# Calculate turnstile entries and exits by taking the difference between observations
+tud21_clean <- tud21_clean %>%
+  mutate(net_entries = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      entries - dplyr::lag(entries, n = 1))) %>% 
+  mutate(net_exits = dplyr::if_else(yday_diff < 0 | yday_diff > 1, 
+                                      0,
+                                      exits - dplyr::lag(exits, n = 1)))
+
+# The lag function makes the first entry "NA." So I want to make sure those values are changed to 0. 
+tud21_clean <- tud21_clean %>% 
+  mutate(net_entries = coalesce(net_entries, 0),
+         yday_diff = coalesce(yday_diff, 0),
+         net_exits = coalesce(net_exits, 0))
+
+# Change the column order so the data frame can be read more logically
+col_order <- c("observation_id", 
+               "turnstile_id",
+               "station",
+               "timestamp",
+               "entries",
+               "net_entries",
+               "exits",
+               "net_exits",
+               "date",
+               "time",
+               "yday",
+               "yday_diff",
+               "line_name",
+               "unit",
+               "c_a",
+               "scp",
+               "division",
+               "description")
+
+tud21_clean <- tud21_clean[, col_order]
+
+# Turnstiles with extra large or small numbers set to 0
+# Take absolute value of turnstiles with reversed counters 
+tud21_clean <- tud21_clean %>% 
+  mutate(
+  net_entries = case_when(
+    net_entries > 10000 | net_entries < -10000 ~ 0,
+    net_entries < 0 | net_entries > -10000 ~ abs(net_entries),
+    TRUE ~ net_entries
+  ),
+  net_exits = case_when(
+    net_exits > 10000 | net_exits < -10000 ~ 0,
+    net_exits < 0 | net_exits > -10000 ~ abs(net_exits),
+    TRUE ~ net_exits))
+
+# Aggregate the number of entries and exits by turnstile. 
+tud21_sum <- tud21_clean %>% 
+  group_by(turnstile_id, 
+           date, 
+           station,
+           line_name,
+           unit,
+           c_a,
+           scp) %>% 
+  summarise(entry_total = sum(net_entries),
+            exit_total = sum(net_exits))
+
+tud21_rbs_join <- left_join(tud21_sum,
+                            remote_booth_station,
+                            by = c("station" = "station",
+                                   "unit" = "unit")) %>% 
+  select(-c(line_name.x,
+            booth,
+            scp.y))
+
+# Next, join the location data to the previous joined data frame
+tud21_location_join <- left_join(tud21_rbs_join,
+                                  mta_locations,
+                                  by = "complex_id") %>% 
+  distinct(turnstile_id, date, station, 
+           .keep_all = TRUE)
+
+# Clean up column names / reorganize columns
+tud21_location_join <- tud21_location_join %>% 
+  select(-c(division.y,
+            daytime_routes,
+            ada_direction_notes,
+            ada_nb,
+            ada_sb,
+            capital_outage_nb,
+            capital_outage_sb)) %>% 
+  rename(station_abbr = station,
+         scp = scp.x,
+         line_name = line_name.y,
+         station_long = stop_name)
+
+tud21_location_join <- tud21_location_join %>% 
+  rename(division = division.x,
+         complex_lat = gtfs_latitude,
+         complex_long = gtfs_longitude)
+
+```
+
+Now let's combine the 2019, 2020, and 2021 data frames together for a complete data set. 
+
+```{r}
+turnstile_usage_2019_2021 <- bind_rows(tud19_location_join, 
+                                       tud20_location_join, 
+                                       tud21_location_join)
+```
+
+```{r, fig.width = 12}
+system_total <- turnstile_usage_2019_2021 %>% 
+  group_by(date) %>% 
+  summarise(daily_entries = sum(entry_total),
+            daily_exits = sum(exit_total))
+
+system_plot <- ggplot(data = system_total,
+                           aes(x = date)) +
+  geom_line(aes(y = daily_entries, color = "daily_entries")) +
+  geom_line(aes(y = daily_exits, color = "daily_exits")) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  scale_y_continuous(name = "Daily Entries / Exits", labels = scales::comma) +
+  theme(legend.position = "bottom",
+        legend.text = element_text(color = "grey20", size = 10),
+        legend.title = element_text(color = "grey20", size = 10),
+        axis.text.x = element_text(color = "grey20", size = 10),
+        axis.title.x = element_text(color = "grey20", size = 10),
+        axis.text.y = element_text(color = "grey20", size = 10),
+        axis.title.y = element_text(color = "grey20", size = 10))
+
+system_plot
+```
 
 
 
