@@ -298,10 +298,6 @@ tud19_location_join <- tud19_location_join %>%
   rename(division = division.x,
          complex_lat = gtfs_latitude,
          complex_long = gtfs_longitude)
-
-complex_list <- unique(tud19_location_join[, c("station_abbr", 
-                                               "station_long", 
-                                               "complex_id")])
 ```
 
 Now we can finally start visualizing! Let's see what the system-wide entry/exit data looks like
@@ -311,12 +307,6 @@ system_total_2019 <- tud19_location_join %>%
   group_by(date) %>% 
   summarise(daily_entries = sum(entry_total),
             daily_exits = sum(exit_total))
-
-system_weekly_2019 <- tud19_location_join %>% 
-  mutate(week_num = strftime(date, format = "%V")) %>% 
-  group_by(week_num) %>% 
-  summarise(weekly_entries = sum(entry_total),
-            weekly_exits = sum(exit_total))
 
 system_2019_plot <- ggplot(data = system_total_2019,
                            aes(x = date)) +
@@ -594,6 +584,8 @@ Now let's combine the 2019, 2020, and 2021 data frames together for a complete d
 turnstile_usage_2019_2021 <- bind_rows(tud19_location_join, 
                                        tud20_location_join, 
                                        tud21_location_join)
+
+saveRDS(turnstile_usage_2019_2021, "turnstile_usage_2019_2021.rds")
 ```
 
 ```{r, fig.width = 12}
@@ -609,16 +601,30 @@ system_plot <- ggplot(data = system_total,
   scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
   scale_y_continuous(name = "Daily Entries / Exits", labels = scales::comma) +
   theme(legend.position = "bottom",
-        legend.text = element_text(color = "grey20", size = 10),
-        legend.title = element_text(color = "grey20", size = 10),
-        axis.text.x = element_text(color = "grey20", size = 10),
-        axis.title.x = element_text(color = "grey20", size = 10),
-        axis.text.y = element_text(color = "grey20", size = 10),
-        axis.title.y = element_text(color = "grey20", size = 10))
+        legend.text = element_text(color = "grey20", size = 20),
+        legend.title = element_text(color = "grey20", size = 20),
+        axis.text.x = element_text(color = "grey20", size = 20, angle = 45, vjust = 1, hjust = 1),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20))
 
 system_plot
 ```
 
+```{r}
+# Import NYC COVID Data 
+nyc_covid_url <- "https://raw.githubusercontent.com/nychealth/coronavirus-data/master/trends/data-by-day.csv"
+
+nyc_covid_data <- read_csv(nyc_covid_url) %>% 
+  clean_names()
+
+cases_by_date <- nyc_covid_data %>% 
+  select(c(date_of_interest, case_count))
+
+# Convert date column into class Date
+cases_by_date$date_of_interest <- gsub('/', '-', cases_by_date$date_of_interest)
+cases_by_date$date_of_interest <- mdy(cases_by_date$date_of_interest)
+```
 
 
 
